@@ -6,16 +6,10 @@ import { UploadCloud, FileAudio, X, Music, Play, Pause, Loader2, Disc } from 'lu
 import { supabase } from './supabaseClient';
 import './index.css';
 
-const PRESETS = [
-  { id: 'calm_piano', label: 'Calm Piano' },
-  { id: 'flute_cover', label: 'Flute Cover' },
-  { id: 'minimal_acoustic', label: 'Minimal Acoustic' }
-];
-
 function App() {
   const [file, setFile] = useState(null);
   const [dragging, setDragging] = useState(false);
-  const [preset, setPreset] = useState('calm_piano');
+  const [prompt, setPrompt] = useState('Create a full instrumental karaoke remake with classical guitar and soft piano. Completely remove all vocals and drums.');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
@@ -130,7 +124,7 @@ function App() {
       const response = await fetch('http://localhost:8000/api/v1/generate-track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ song_id: analysisResult.song_id }),
+        body: JSON.stringify({ song_id: analysisResult.song_id, prompt: prompt }),
       });
       
       if (response.ok) {
@@ -161,7 +155,7 @@ function App() {
     setIsAnalyzing(true);
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('style_preset', preset);
+    formData.append('style_preset', 'ai_auto_prompt');
     if (session) {
       formData.append('user_id', session.user.id);
     }
@@ -324,12 +318,14 @@ function App() {
 
           <div className="controls-area">
             <div className="preset-selector">
-              <h3 className="preset-title">Select Output Style</h3>
-              <div className="preset-options">
-                {PRESETS.map(p => (
-                  <button key={p.id} className={`preset-btn ${preset === p.id ? 'active' : ''}`} onClick={() => setPreset(p.id)}>{p.label}</button>
-                ))}
-              </div>
+              <h3 className="preset-title" style={{marginBottom: '0.8rem'}}>AI System Prompt</h3>
+              <textarea 
+                className="auth-input" 
+                style={{width: '100%', minHeight: '100px', resize: 'vertical', fontFamily: 'inherit', padding: '1rem'}}
+                value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                placeholder="Describe exactly how you want your cover synthesized..."
+              />
             </div>
             <button className="action-btn" onClick={handleAnalyze} disabled={!file || isAnalyzing}>
               {isAnalyzing ? (
@@ -363,9 +359,9 @@ function App() {
                   style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
                 >
                   {isGenerating ? (
-                    <><Loader2 className="spinner" size={20} />Synthesizing Audio...</>
+                    <><Loader2 className="spinner" size={20} />Connecting to Cloud AI...</>
                   ) : (
-                    <><Music size={20} />Download Synthesized Track (WAV)</>
+                    <><Music size={20} />Generate AI Track (Replicate API)</>
                   )}
                 </button>
               </div>

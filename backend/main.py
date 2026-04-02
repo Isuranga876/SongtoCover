@@ -8,9 +8,9 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from typing import List
+import replicate
 
 from analyzer import analyze_audio
-from synthesizer import generate_backing_track
 
 load_dotenv()
 
@@ -138,14 +138,13 @@ async def analyze_song(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         # 6. Clean up temp file
-        if local_temp_path and os.path.exists(local_temp_path):
-            try:
-                os.remove(local_temp_path)
-            except:
-                pass
+        # We NO LONGER delete the local temp file so that the generate-track endpoint can use it
+        # avoiding Supabase Storage Bucket errors in local setups.
+        pass
 
 class GenerateReq(BaseModel):
     song_id: str
+    prompt: str = ""
 
 @app.post("/api/v1/generate-track")
 async def generate_track(req: GenerateReq):
@@ -165,22 +164,43 @@ async def generate_track(req: GenerateReq):
         if not stored_path:
             raise HTTPException(status_code=404, detail="Original song file path missing")
             
-        os.makedirs("temp_uploads", exist_ok=True)
-        original_temp_path = os.path.join("temp_uploads", f"original_{song_id}.mp3")
+        # Instead of downloading from Supabase bucket (which fails if RLS blocks upload initially),
+        # we directly read the temp_uploads file that we preserved!
+        filename = stored_path.split("/")[-1]
+        original_temp_path = os.path.join("temp_uploads", filename)
         
-        # Download from Supabase Storage
-        res = supabase.storage.from_("songs").download(stored_path)
-        with open(original_temp_path, "wb") as f:
-            f.write(res)
+        if not os.path.exists(original_temp_path):
+            raise HTTPException(status_code=404, detail="Local audio file missing. Please re-upload and analyze the song again.")
         
-        temp_filepath = os.path.join("temp_uploads", f"backing_{song_id}.wav")
-        
-        generate_backing_track(original_temp_path, sections_res.data, bpm, temp_filepath)
-        
+        # Replicate Generative AI logic
+        if not os.environ.get("REPLICATE_API_TOKEN"):
+             raise HTTPException(status_code=500, detail="REPLICATE_API_TOKEN is missing in the .env file. Please add it to generate AI tracks.")
+             
         try:
-             os.remove(original_temp_path)
-        except:
-             pass
+             output = replicate.run(
+                 "meta/musicgen-melody:7a76a8258b23fae65c5a22debb8851d2d7e81618ed20b3eb3ee9ef726a7fdd74",
+                 input={
+                     "melody": open(original_temp_path, "rb"),
+                     "prompt": req.prompt if req.prompt else "soft piano and classical guitar instrumental backing track",
+                     "duration": 30,
+                     "model_version": "stereo"
+                 }
+             )
+             
+             if not output:
+                 raise Exception("AI model returned empty response.")
+                 
+             generated_url = output
+             
+             import requests
+             temp_filepath = os.path.join("temp_uploads", f"ai_gen_{song_id}.wav")
+             r = requests.get(generated_url)
+             with open(temp_filepath, "wb") as f:
+                 f.write(r.content)
+                 
+        except Exception as ai_e:
+             print(f"Replicate AI Error: {ai_e}")
+             raise HTTPException(status_code=500, detail=f"AI generation failed: {str(ai_e)}")
         
         return FileResponse(
             temp_filepath,
