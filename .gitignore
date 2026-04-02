@@ -1,0 +1,27 @@
+# Environments
+.env
+.env.*
+.env.local
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+backend/temp_uploads/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+
+# Workspace
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
