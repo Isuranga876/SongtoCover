@@ -38,7 +38,8 @@ async def health_check():
 @app.post("/api/v1/analyze")
 async def analyze_song(
     file: UploadFile = File(...),
-    style_preset: str = Form("calm_piano")
+    style_preset: str = Form("calm_piano"),
+    user_id: str = Form(None)
 ):
     """
     Phase 2 Endpoint:
@@ -94,6 +95,9 @@ async def analyze_song(
             "bpm": analysis_data["bpm"],
             "musical_key": analysis_data["key"]
         }
+        
+        if user_id:
+            song_data["user_id"] = user_id
         
         song_insert = supabase.table("songs").insert(song_data).execute()
         song_id = song_insert.data[0]['id']
