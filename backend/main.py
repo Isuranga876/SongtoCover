@@ -2,12 +2,15 @@ import os
 import uuid
 import shutil
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from typing import List
 
 from analyzer import analyze_audio
+from synthesizer import generate_backing_track
 
 load_dotenv()
 
@@ -140,6 +143,53 @@ async def analyze_song(
                 os.remove(local_temp_path)
             except:
                 pass
+
+class GenerateReq(BaseModel):
+    song_id: str
+
+@app.post("/api/v1/generate-track")
+async def generate_track(req: GenerateReq):
+    song_id = req.song_id
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase not connected")
+        
+    try:
+        sections_res = supabase.table("sections").select("*").eq("song_id", song_id).order("start_time").execute()
+        if not sections_res.data:
+            raise HTTPException(status_code=404, detail="No sections found")
+            
+        song_res = supabase.table("songs").select("bpm, stored_file_path").eq("id", song_id).execute()
+        bpm = song_res.data[0].get("bpm", 120) if song_res.data else 120
+        stored_path = song_res.data[0].get("stored_file_path") if song_res.data else None
+        
+        if not stored_path:
+            raise HTTPException(status_code=404, detail="Original song file path missing")
+            
+        os.makedirs("temp_uploads", exist_ok=True)
+        original_temp_path = os.path.join("temp_uploads", f"original_{song_id}.mp3")
+        
+        # Download from Supabase Storage
+        res = supabase.storage.from_("songs").download(stored_path)
+        with open(original_temp_path, "wb") as f:
+            f.write(res)
+        
+        temp_filepath = os.path.join("temp_uploads", f"backing_{song_id}.wav")
+        
+        generate_backing_track(original_temp_path, sections_res.data, bpm, temp_filepath)
+        
+        try:
+             os.remove(original_temp_path)
+        except:
+             pass
+        
+        return FileResponse(
+            temp_filepath,
+            media_type="audio/wav",
+            filename=f"BackingTrack_{song_id}.wav"
+        )
+    except Exception as e:
+        print(f"Error generating track: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

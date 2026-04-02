@@ -17,6 +17,7 @@ function App() {
   const [dragging, setDragging] = useState(false);
   const [preset, setPreset] = useState('calm_piano');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   
@@ -120,6 +121,38 @@ function App() {
   const removeFile = () => {
     setFile(null);
     setAnalysisResult(null);
+  };
+
+  const handleGenerate = async () => {
+    if (!analysisResult || !analysisResult.song_id) return;
+    setIsGenerating(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/generate-track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ song_id: analysisResult.song_id }),
+      });
+      
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Song2Cover_${analysisResult.song_id}.wav`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      } else {
+        const errData = await response.json();
+        alert("Failed to generate track: " + (errData.detail || "Unknown error"));
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to connect to backend for track synthesis.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const handleAnalyze = async () => {
@@ -320,6 +353,21 @@ function App() {
                     <span className="section-time">{formatTime(section.start)} - {formatTime(section.end)}</span>
                   </div>
                 ))}
+              </div>
+              
+              <div style={{ marginTop: '2rem' }}>
+                <button 
+                  className="action-btn" 
+                  onClick={handleGenerate}
+                  disabled={isGenerating}
+                  style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+                >
+                  {isGenerating ? (
+                    <><Loader2 className="spinner" size={20} />Synthesizing Audio...</>
+                  ) : (
+                    <><Music size={20} />Download Synthesized Track (WAV)</>
+                  )}
+                </button>
               </div>
             </div>
           )}
