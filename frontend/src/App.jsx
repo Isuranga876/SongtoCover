@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import gsap from 'gsap';
 import WaveSurfer from 'wavesurfer.js';
+import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import { UploadCloud, FileAudio, X, Music, Play, Pause, Loader2, Disc } from 'lucide-react';
 import './index.css';
 
@@ -22,6 +23,7 @@ function App() {
   const dashboardRef = useRef(null);
   const waveformRef = useRef(null);
   const wavesurfer = useRef(null);
+  const wsRegions = useRef(null);
 
   // GSAP Initial Animation
   useEffect(() => {
@@ -56,6 +58,9 @@ function App() {
         height: 128,
       });
 
+      // Initialize Regions plugin
+      wsRegions.current = wavesurfer.current.registerPlugin(RegionsPlugin.create());
+
       const objectUrl = URL.createObjectURL(file);
       wavesurfer.current.load(objectUrl);
 
@@ -68,6 +73,7 @@ function App() {
         if (wavesurfer.current) {
           wavesurfer.current.destroy();
           wavesurfer.current = null;
+          wsRegions.current = null;
         }
         URL.revokeObjectURL(objectUrl);
       };
@@ -135,8 +141,26 @@ function App() {
       if (response.ok) {
         setAnalysisResult(data);
         
-        // Add Regions to Wavesurfer if we wanted to (requires wavesurfer regions plugin)
-        // For MVP, we'll just display it in a list.
+        // Add Regions to Wavesurfer
+        if (wsRegions.current && data.sections) {
+          wsRegions.current.clearRegions();
+          data.sections.forEach(sec => {
+            let color = 'rgba(255, 255, 255, 0.1)';
+            if (sec.label === 'intro') color = 'rgba(59, 130, 246, 0.4)'; // Blue
+            else if (sec.label === 'vocal') color = 'rgba(168, 85, 247, 0.4)'; // Purple
+            else if (sec.label === 'interlude') color = 'rgba(236, 72, 153, 0.4)'; // Pink
+            else if (sec.label === 'outro') color = 'rgba(16, 185, 129, 0.4)'; // Green
+
+            wsRegions.current.addRegion({
+              start: sec.start,
+              end: sec.end,
+              content: sec.label.toUpperCase(),
+              color: color,
+              drag: false,
+              resize: false
+            });
+          });
+        }
         
         // Scroll down natively instead of GSAP to avoid needing ScrollToPlugin
         setTimeout(() => {
