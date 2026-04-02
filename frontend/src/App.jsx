@@ -3,6 +3,7 @@ import gsap from 'gsap';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import { UploadCloud, FileAudio, X, Music, Play, Pause, Loader2, Disc } from 'lucide-react';
+import { supabase } from './supabaseClient';
 import './index.css';
 
 const PRESETS = [
@@ -18,6 +19,14 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  
+  // Auth state
+  const [session, setSession] = useState(null);
+  const [showAuth, setShowAuth] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   const titleRef = useRef(null);
   const dashboardRef = useRef(null);
@@ -39,13 +48,23 @@ function App() {
     );
   }, []);
 
+  // Supabase Auth Listener
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   // Initialize WaveSurfer when file is selected
   useEffect(() => {
     if (file && waveformRef.current) {
-      // Destroy previous instance
-      if (wavesurfer.current) {
-        wavesurfer.current.destroy();
-      }
+      if (wavesurfer.current) wavesurfer.current.destroy();
 
       wavesurfer.current = WaveSurfer.create({
         container: waveformRef.current,
@@ -58,16 +77,12 @@ function App() {
         height: 128,
       });
 
-      // Initialize Regions plugin
       wsRegions.current = wavesurfer.current.registerPlugin(RegionsPlugin.create());
 
       const objectUrl = URL.createObjectURL(file);
       wavesurfer.current.load(objectUrl);
 
       wavesurfer.current.on('finish', () => setIsPlaying(false));
-      wavesurfer.current.on('ready', () => {
-        // Waveform is ready, we can clear loading states if needed
-      });
 
       return () => {
         if (wavesurfer.current) {
@@ -87,31 +102,19 @@ function App() {
     }
   };
 
-  const onDragOver = useCallback((e) => {
-    e.preventDefault();
-    setDragging(true);
-  }, []);
-
-  const onDragLeave = useCallback((e) => {
-    e.preventDefault();
-    setDragging(false);
-  }, []);
-
+  const onDragOver = useCallback((e) => { e.preventDefault(); setDragging(true); }, []);
+  const onDragLeave = useCallback((e) => { e.preventDefault(); setDragging(false); }, []);
   const onDrop = useCallback((e) => {
     e.preventDefault();
     setDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileSelect(e.dataTransfer.files[0]);
-    }
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFileSelect(e.dataTransfer.files[0]);
   }, []);
 
   const handleFileSelect = (f) => {
     if (f.type.startsWith('audio/')) {
       setFile(f);
-      setAnalysisResult(null); // Reset results on new file
-    } else {
-      alert("Please upload an audio file (MP3, WAV, etc.)");
-    }
+      setAnalysisResult(null);
+    } else alert("Please upload an audio file (MP3, WAV, etc.)");
   };
 
   const removeFile = () => {
@@ -123,14 +126,14 @@ function App() {
     if (!file) return;
 
     setIsAnalyzing(true);
-    
-    // Create FormData
     const formData = new FormData();
     formData.append('file', file);
     formData.append('style_preset', preset);
+    if (session) {
+      formData.append('user_id', session.user.id);
+    }
 
     try {
-      // This will be calling our FastAPI backend
       const response = await fetch('http://localhost:8000/api/v1/analyze', {
         method: 'POST',
         body: formData,
@@ -141,15 +144,14 @@ function App() {
       if (response.ok) {
         setAnalysisResult(data);
         
-        // Add Regions to Wavesurfer
         if (wsRegions.current && data.sections) {
           wsRegions.current.clearRegions();
           data.sections.forEach(sec => {
             let color = 'rgba(255, 255, 255, 0.1)';
-            if (sec.label === 'intro') color = 'rgba(59, 130, 246, 0.4)'; // Blue
-            else if (sec.label === 'vocal') color = 'rgba(168, 85, 247, 0.4)'; // Purple
-            else if (sec.label === 'interlude') color = 'rgba(236, 72, 153, 0.4)'; // Pink
-            else if (sec.label === 'outro') color = 'rgba(16, 185, 129, 0.4)'; // Green
+            if (sec.label === 'intro') color = 'rgba(59, 130, 246, 0.4)';
+            else if (sec.label === 'vocal') color = 'rgba(168, 85, 247, 0.4)';
+            else if (sec.label === 'interlude') color = 'rgba(236, 72, 153, 0.4)';
+            else if (sec.label === 'outro') color = 'rgba(16, 185, 129, 0.4)';
 
             wsRegions.current.addRegion({
               start: sec.start,
@@ -162,7 +164,6 @@ function App() {
           });
         }
         
-        // Scroll down natively instead of GSAP to avoid needing ScrollToPlugin
         setTimeout(() => {
           document.querySelector('.results-panel')?.scrollIntoView({ behavior: 'smooth' });
         }, 100);
@@ -171,9 +172,28 @@ function App() {
       }
     } catch (err) {
       console.error(err);
-      alert("Failed to connect to backend. Make sure FastAPI is running on port 8000.");
+      alert("Failed to connect to backend.");
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    let error;
+    if (authMode === 'signup') {
+      const res = await supabase.auth.signUp({ email: authEmail, password: authPassword });
+      error = res.error;
+    } else {
+      const res = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword });
+      error = res.error;
+    }
+    setAuthLoading(false);
+    if (error) alert(error.message);
+    else {
+      setShowAuth(false);
+      setAuthPassword('');
     }
   };
 
@@ -185,25 +205,51 @@ function App() {
 
   return (
     <div className="app-container">
+      {/* Auth Modal Overlay */}
+      {showAuth && (
+        <div className="auth-modal-overlay" onClick={() => setShowAuth(false)}>
+          <div className="auth-modal" onClick={e => e.stopPropagation()}>
+            <div className="auth-tabs">
+              <button className={`auth-tab ${authMode === 'login' ? 'active' : ''}`} onClick={() => setAuthMode('login')}>Login</button>
+              <button className={`auth-tab ${authMode === 'signup' ? 'active' : ''}`} onClick={() => setAuthMode('signup')}>Sign Up</button>
+            </div>
+            <form onSubmit={handleAuth} style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
+              <input type="email" placeholder="Email" className="auth-input" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required />
+              <input type="password" placeholder="Password" className="auth-input" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required />
+              <button className="action-btn" type="submit" disabled={authLoading}>
+                 {authLoading ? <Loader2 className="spinner" size={20}/> : (authMode === 'login' ? 'Log In' : 'Sign Up')}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <header className="navbar">
         <div className="logo">
           <Disc className="text-brand-primary" size={24} />
           Song2Cover
         </div>
+        <div className="nav-user">
+           {session ? (
+              <>
+                 <span style={{color: 'var(--text-muted)'}}>{session.user.email}</span>
+                 <button className="login-btn" onClick={() => supabase.auth.signOut()}>Logout</button>
+              </>
+           ) : (
+              <button className="login-btn" onClick={() => setShowAuth(true)}>Login / Sign Up</button>
+           )}
+        </div>
       </header>
       
       <main className="main-content">
         <div ref={titleRef}>
-          <h1 className="hero-title">
-            Rearrange Your Music
-          </h1>
+          <h1 className="hero-title">Rearrange Your Music</h1>
           <p className="hero-subtitle">
             Upload an original song and automatically generate a simplified backing track arrangement for your covers.
           </p>
         </div>
 
         <div className="dashboard-panel" ref={dashboardRef}>
-          
           {!file ? (
             <div 
               className={`upload-zone ${dragging ? 'drag-active' : ''}`}
@@ -218,14 +264,8 @@ function App() {
                 <p className="upload-subtext">or click to browse from your computer (MP3, WAV)</p>
               </div>
               <input 
-                id="fileUpload" 
-                type="file" 
-                accept="audio/*" 
-                className="hidden" 
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  if(e.target.files && e.target.files[0]) handleFileSelect(e.target.files[0]);
-                }}
+                id="fileUpload" type="file" accept="audio/*" className="hidden" style={{ display: 'none' }}
+                onChange={(e) => { if (e.target.files && e.target.files[0]) handleFileSelect(e.target.files[0]); }}
               />
             </div>
           ) : (
@@ -234,9 +274,7 @@ function App() {
                 <FileAudio size={20} className="text-brand-primary" />
                 {file.name}
               </div>
-              <button className="file-remove" onClick={removeFile} title="Remove file">
-                <X size={20} />
-              </button>
+              <button className="file-remove" onClick={removeFile} title="Remove file"><X size={20} /></button>
             </div>
           )}
 
@@ -244,10 +282,7 @@ function App() {
             <div className="waveform-section">
               <div className="waveform-container" ref={waveformRef}></div>
               <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}>
-                <button 
-                  onClick={togglePlay} 
-                  style={{ background: 'var(--glass-bg)', border: '1px solid var(--glass-border)', borderRadius: '50%', width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}
-                >
+                <button onClick={togglePlay} style={{ background: 'var(--glass-bg)', border: '1px solid var(--glass-border)', borderRadius: '50%', width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
                   {isPlaying ? <Pause size={20} /> : <Play size={20} style={{ marginLeft: '4px' }} />}
                 </button>
               </div>
@@ -259,59 +294,35 @@ function App() {
               <h3 className="preset-title">Select Output Style</h3>
               <div className="preset-options">
                 {PRESETS.map(p => (
-                  <button 
-                    key={p.id}
-                    className={`preset-btn ${preset === p.id ? 'active' : ''}`}
-                    onClick={() => setPreset(p.id)}
-                  >
-                    {p.label}
-                  </button>
+                  <button key={p.id} className={`preset-btn ${preset === p.id ? 'active' : ''}`} onClick={() => setPreset(p.id)}>{p.label}</button>
                 ))}
               </div>
             </div>
-
-            <button 
-              className="action-btn" 
-              onClick={handleAnalyze}
-              disabled={!file || isAnalyzing}
-            >
+            <button className="action-btn" onClick={handleAnalyze} disabled={!file || isAnalyzing}>
               {isAnalyzing ? (
-                <>
-                  <Loader2 className="spinner" size={20} />
-                  Analyzing Arrangement...
-                </>
+                <><Loader2 className="spinner" size={20} />Analyzing Arrangement...</>
               ) : (
-                <>
-                  <Music size={20} />
-                  Generate Arrangement
-                </>
+                <><Music size={20} />Generate Arrangement</>
               )}
             </button>
           </div>
 
           {analysisResult && (
             <div className="results-panel">
-              <h3 className="results-title">
-                <Disc size={20} />
-                Arrangement Plan
-              </h3>
+              <h3 className="results-title"><Disc size={20} />Arrangement Plan</h3>
               <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
                 {analysisResult.message || `Analyzed ${analysisResult.filename}`}
               </p>
-              
               <div className="section-list">
                 {analysisResult.sections?.map((section, idx) => (
                   <div key={idx} className="section-item">
                     <span className="section-label">{section.label}</span>
-                    <span className="section-time">
-                      {formatTime(section.start)} - {formatTime(section.end)}
-                    </span>
+                    <span className="section-time">{formatTime(section.start)} - {formatTime(section.end)}</span>
                   </div>
                 ))}
               </div>
             </div>
           )}
-
         </div>
       </main>
     </div>
